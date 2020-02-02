@@ -17,6 +17,8 @@ class Child(models.Model):
 
 
 class ChildSerializer(mixins.GetOrCreateNestedSerializerMixin, serializers.ModelSerializer):
+    DEFAULT_MATCH_ON = ['name']
+
     class Meta:
         model = Child
         fields = '__all__'
@@ -82,12 +84,16 @@ class ReverseManyChild(models.Model):
 
 
 class ReverseChildSerializer(mixins.GetOrCreateNestedSerializerMixin, serializers.ModelSerializer):
+    DEFAULT_MATCH_ON = ['name']
+
     class Meta:
         model = ReverseChild
         fields = '__all__'
 
 
 class ReverseManyChildSerializer(mixins.GetOrCreateNestedSerializerMixin, serializers.ModelSerializer):
+    DEFAULT_MATCH_ON = ['name']
+
     class Meta:
         model = ReverseManyChild
         fields = '__all__'
@@ -126,6 +132,35 @@ class WritableNestedModelSerializerTest(TestCase):
         )
         serializer.save()
 
+    def test_generic_nested_get(self):
+        """A second run with a GetOrCreate nested serializer should find same child object (by name)"""
+        data = {
+            "child": {
+                "name": "test",
+            }
+        }
+
+        serializer = GenericParentSerializer(data=data)
+        valid = serializer.is_valid()
+        self.assertTrue(
+            valid,
+            "Serializer should have been valid:  {}".format(serializer.errors)
+        )
+        serializer.save()
+
+        serializer = GenericParentSerializer(data=data)
+        valid = serializer.is_valid()
+        self.assertTrue(
+            valid,
+            "Serializer should have been valid:  {}".format(serializer.errors)
+        )
+        serializer.save()
+
+        self.assertEqual(
+            1,
+            Child.objects.count(),
+        )
+
     def test_direct_nested_create(self):
         data = {
             "child": {
@@ -140,6 +175,40 @@ class WritableNestedModelSerializerTest(TestCase):
             "Serializer should have been valid:  {}".format(serializer.errors)
         )
         serializer.save()
+
+    def test_direct_nested_get(self):
+        """A second run with a GetOrCreate nested serializer should find same child object (by name)"""
+        data = {
+            "child": {
+                "name": "test",
+            }
+        }
+
+        serializer = ParentSerializer(data=data)
+        valid = serializer.is_valid()
+        self.assertTrue(
+            valid,
+            "Serializer should have been valid:  {}".format(serializer.errors)
+        )
+        serializer.save()
+
+        serializer = ParentSerializer(data=data)
+        valid = serializer.is_valid()
+        self.assertTrue(
+            valid,
+            "Serializer should have been valid:  {}".format(serializer.errors)
+        )
+        serializer.save()
+
+        self.assertEqual(
+            2,
+            Parent.objects.count()
+        )
+
+        self.assertEqual(
+            1,
+            Child.objects.count(),
+        )
 
     def test_direct_many_nested_create(self):
         data = {
@@ -156,6 +225,35 @@ class WritableNestedModelSerializerTest(TestCase):
         )
         serializer.save()
 
+    def test_direct_many_nested_get(self):
+        """A second run with a GetOrCreate nested serializer should find same child object (by name)"""
+        data = {
+            "children": [{
+                "name": "test",
+            }]
+        }
+
+        serializer = ParentManySerializer(data=data)
+        valid = serializer.is_valid()
+        self.assertTrue(
+            valid,
+            "Serializer should have been valid:  {}".format(serializer.errors)
+        )
+        serializer.save()
+
+        serializer = ParentManySerializer(data=data)
+        valid = serializer.is_valid()
+        self.assertTrue(
+            valid,
+            "Serializer should have been valid:  {}".format(serializer.errors)
+        )
+        serializer.save()
+
+        self.assertEqual(
+            1,
+            Child.objects.count(),
+        )
+
     def test_reverse_nested_create(self):
         data = {
             "children": [{
@@ -171,6 +269,40 @@ class WritableNestedModelSerializerTest(TestCase):
         )
         serializer.save()
 
+    def test_reverse_nested_get(self):
+        """A second run with a GetOrCreate nested serializer should find same child object (by name)"""
+        data = {
+            "children": [{
+                "name": "test",
+            }]
+        }
+
+        serializer = ReverseParentSerializer(data=data)
+        valid = serializer.is_valid()
+        self.assertTrue(
+            valid,
+            "Serializer should have been valid:  {}".format(serializer.errors)
+        )
+        serializer.save()
+
+        serializer = ReverseParentSerializer(data=data)
+        valid = serializer.is_valid()
+        self.assertTrue(
+            valid,
+            "Serializer should have been valid:  {}".format(serializer.errors)
+        )
+        serializer.save()
+
+        self.assertEqual(
+            2,
+            ReverseParent.objects.count()
+        )
+
+        self.assertEqual(
+            1,
+            ReverseChild.objects.count(),
+        )
+
     def test_reverse_many_nested_create(self):
         data = {
             "children": [{
@@ -185,6 +317,35 @@ class WritableNestedModelSerializerTest(TestCase):
             "Serializer should have been valid:  {}".format(serializer.errors)
         )
         serializer.save()
+
+    def test_reverse_many_nested_get(self):
+        """A second run with a GetOrCreate nested serializer should find same child object (by name)"""
+        data = {
+            "children": [{
+                "name": "test",
+            }]
+        }
+
+        serializer = ReverseManyParentSerializer(data=data)
+        valid = serializer.is_valid()
+        self.assertTrue(
+            valid,
+            "Serializer should have been valid:  {}".format(serializer.errors)
+        )
+        serializer.save()
+
+        serializer = ReverseManyParentSerializer(data=data)
+        valid = serializer.is_valid()
+        self.assertTrue(
+            valid,
+            "Serializer should have been valid:  {}".format(serializer.errors)
+        )
+        serializer.save()
+
+        self.assertEqual(
+            1,
+            ReverseManyChild.objects.count(),
+        )
 
 
 ###################
