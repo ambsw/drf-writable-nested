@@ -524,13 +524,9 @@ class RelatedSaveMixin(FieldLookupMixin):
 
     def save(self, **kwargs):
         """We already converted the inputs into a model so we need to save that model"""
-        # prevent recursion when we save a reverse (which tries to save self as a direct)
-        if self._is_saved:
-            return
         # Create or update direct relations (foreign key, one-to-one)
         self._save_direct_relations(kwargs)
         instance = super(RelatedSaveMixin, self).save(**kwargs)
-        self._is_saved = True
         self._save_reverse_relations(instance=instance, kwargs=kwargs)
         return instance
 
