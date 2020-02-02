@@ -3,12 +3,19 @@ from collections import OrderedDict, defaultdict
 
 from django.contrib.contenttypes.fields import GenericRelation
 from django.contrib.contenttypes.models import ContentType
+from django.db import transaction
 from django.db.models import ProtectedError, FieldDoesNotExist
 from django.db.models.fields.related import ForeignObjectRel
 from django.utils.translation import ugettext_lazy as _
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
-from rest_framework.validators import UniqueValidator
+from rest_framework.fields import empty
+from rest_framework.relations import ManyRelatedField
+from rest_framework.serializers import BaseSerializer
+from rest_framework.validators import UniqueValidator, UniqueTogetherValidator
+
+# permit writable nested serializers
+serializers.raise_errors_on_nested_writes = lambda a, b, c: None
 
 
 class BaseNestedModelSerializer(serializers.ModelSerializer):
@@ -243,6 +250,7 @@ class NestedCreateMixin(BaseNestedModelSerializer):
     """
     Adds nested create feature
     """
+
     def create(self, validated_data):
         relations, reverse_relations = self._extract_relations(validated_data)
 
@@ -417,3 +425,379 @@ class UniqueFieldsMixin(serializers.ModelSerializer):
     def update(self, instance, validated_data):
         self._validate_unique_fields(validated_data)
         return super(UniqueFieldsMixin, self).update(instance, validated_data)
+
+
+class FieldLookupMixin(serializers.Serializer):
+
+    def _get_model_field(self, source):
+        """Returns the field on the model"""
+        # for serializers like ModelSerializer, the Meta.model can be used to classify fields
+        if not hasattr(self, 'Meta') or not hasattr(self.Meta, 'model'):
+            return None
+        try:
+            return self.Meta.model._meta.get_field(source)
+        except FieldDoesNotExist:
+            pass
+        try:
+            # If `related_name` is not set, field name does not include
+            # `_set` -> remove it and check again
+            default_postfix = '_set'
+            if source.endswith(default_postfix):
+                return self.Meta.model._meta.get_field(source[:-len(default_postfix)])
+        except FieldDoesNotExist:
+            pass
+        return None
+
+    TYPE_READ_ONLY = 'read-only'
+    TYPE_LOCAL = 'local'
+    TYPE_DIRECT = 'direct'
+    TYPE_REVERSE = 'reverse'
+
+    _cache_field_types = None
+
+    @property
+    def field_types(self):
+        if self._cache_field_types is None:
+            self._populate_field_types()
+        return self._cache_field_types
+
+    def _populate_field_types(self):
+        self._cache_field_types = {}
+        for field_name, field in self.fields.items():
+            if field.read_only:
+                self._cache_field_types[field_name] = self.TYPE_READ_ONLY
+                continue
+            if not isinstance(field, BaseSerializer):
+                self._cache_field_types[field_name] = self.TYPE_LOCAL
+                continue
+            if field.source == '*':
+                self._cache_field_types[field_name] = self.TYPE_DIRECT
+                continue
+            related_field = self._get_model_field(field.source)
+            if isinstance(related_field, ForeignObjectRel):
+                self._cache_field_types[field_name] = self.TYPE_REVERSE
+                continue
+            self._cache_field_types[field_name] = self.TYPE_DIRECT
+
+
+class RelatedSaveMixin(FieldLookupMixin):
+    """
+    RelatedSaveMixin handes the saving of nested fields, both direct and reverse relations:
+     - Direct relations needs to be saved first
+     - The focal object can then be saved (which ensures the focal PK is available)
+     - Finally, reverse relations can be udpated with the object PK
+    """
+    _is_saved = False
+
+    def run_validation(self, data=empty):
+        self._validated_data = super(RelatedSaveMixin, self).run_validation(data)
+        self._errors = {}
+        return self._validated_data
+
+    def to_internal_value(self, data):
+        """Injects the PK of this field into reverse relations so they validate when created in to_internal_value."""
+        self._make_reverse_relations_valid()
+        return super(RelatedSaveMixin, self).to_internal_value(data)
+
+    def _make_reverse_relations_valid(self):
+        """Make the reverse field optional since we may not have a key for the base object."""
+        for field_name, field in self.fields.items():
+            if self.field_types[field_name] != self.TYPE_REVERSE:
+                continue
+            # we know this is a reverse so reverse_field.field is valid
+            related_field = self._get_model_field(field.source).field
+            if isinstance(field, serializers.ListSerializer):
+                field = field.child
+            if isinstance(field, serializers.ModelSerializer):
+                # find the serializer field matching the reverse model relation
+                for sub_field in field.fields.values():
+                    if sub_field.source == related_field.name:
+                        sub_field.required = False
+                        # found the matching field, move on
+                        break
+
+    @property
+    def validated_data(self):
+        """If mixed into a standard Serializer, prevents `save` from accessing reverse relations"""
+        return {k: v for k, v in super(RelatedSaveMixin, self).validated_data.items()
+                if self.field_types[k] != self.TYPE_REVERSE}
+
+    def save(self, **kwargs):
+        """We already converted the inputs into a model so we need to save that model"""
+        # prevent recursion when we save a reverse (which tries to save self as a direct)
+        if self._is_saved:
+            return
+        # Create or update direct relations (foreign key, one-to-one)
+        self._save_direct_relations(kwargs)
+        instance = super(RelatedSaveMixin, self).save(**kwargs)
+        self._is_saved = True
+        self._save_reverse_relations(instance=instance, kwargs=kwargs)
+        return instance
+
+    def _save_direct_relations(self, kwargs):
+        """Save direct relations so FKs exist when committing the base instance"""
+        for field_name, field in self.fields.items():
+            if self.field_types[field_name] != self.TYPE_DIRECT:
+                continue
+            if not isinstance(self._validated_data, dict) or field_name not in self._validated_data:
+                continue
+            # reinject validated_data
+            field._validated_data = self._validated_data[field_name]
+            self._validated_data[field_name] = field.save(**kwargs.pop(field_name, {}))
+
+    def _extract_reverse_relations(self, kwargs):
+        """Removes revere relations from _validated_data to avoid FK integrity issues"""
+        # Remove related fields from validated data for future manipulations
+        related_objects = []
+        for field_name, field in self.fields.items():
+            if self.field_types[field_name] != self.TYPE_REVERSE:
+                continue
+            if not isinstance(self._validated_data, dict) or field_name not in self._validated_data:
+                continue
+            serializer = field
+            if isinstance(serializer, serializers.ListSerializer):
+                serializer = serializer.child
+            if isinstance(serializer, serializers.ModelSerializer):
+                related_objects.append((
+                    field,
+                    self._validated_data.pop(field.source),
+                    kwargs.get(field_name, {}),
+                ))
+        return related_objects
+
+    def _save_reverse_relations(self, instance, kwargs):
+        """Inject the current object as the FK in the reverse related objects and save them"""
+        for field_name, field in self.fields.items():
+            if self.field_types[field_name] != self.TYPE_REVERSE:
+                continue
+            # inject the instance into validated_data so the *_id field is valid when saved
+            related_field = self._get_model_field(field.source).field
+            if isinstance(field, serializers.ListSerializer):
+                for obj in self._validated_data[field_name]:
+                    obj[related_field.name] = instance
+            elif isinstance(field, serializers.ModelSerializer):
+                self._validated_data[field_name][related_field.name] = instance
+            else:
+                raise Exception("unexpected serializer type")
+
+            # (re)inject validated_data to field
+            field._validated_data = self._validated_data.get(field_name)
+            field.save(**kwargs)
+
+
+class FocalSaveMixin(FieldLookupMixin):
+    """Provides a framework for extracting the values needed to get or create the focal object."""
+
+    @transaction.atomic
+    def save(self, **kwargs):
+        match_on = {}
+        m2m_relations = {}
+        create_values = {}
+        for field_name, field in self.fields.items():
+            if self.match_on == '__all__' or field_name in self.match_on:
+                # build match_on dict
+                match_on[field.source or field_name] = kwargs.get(field_name, self._validated_data.get(field_name))
+            if isinstance(field, ManyRelatedField):
+                # we can't provide m2m values as kwargs; must use set() instead
+                m2m_relations[field_name] = kwargs.get(field_name, self._validated_data.get(field_name))
+            elif self.field_types[field_name] == self.TYPE_LOCAL:
+                # need to check kwargs dict since there's no pre-processing
+                create_values[field_name] = kwargs.get(field_name, self._validated_data.get(field_name))
+            elif self.field_types[field_name] == self.TYPE_DIRECT:
+                # kwargs should have been injected into _validated_data when direct relations were saved
+                create_values[field_name] = self._validated_data.get(field_name)
+            # reverse relations aren't sent to a create
+        # a parent serializer may inject a value that isn't among the fields, but is in `match_on`
+        for key in self.match_on:
+            if key not in self.fields.keys():
+                match_on[key] = kwargs.get(key, None)
+        try:
+            match, updated = self.do_save(match_on, create_values)
+            if not updated:
+                updated = self.do_update(match, create_values)
+            if updated:
+                match.save()
+        except (TypeError, ValueError):
+            self.fail('incorrect_type', data_type=type(self._validated_data).__name__)
+        self.do_m2m_update(match, m2m_relations)
+        return match
+
+    def do_save(self, match_on, create_values):
+        """Returns the object requested by match_on and defaults."""
+        raise NotImplementedError("Must use a SerializerMixin or provide a save behavior.")
+
+    def do_update(self, match, create_values):
+        """Update the match (if appropriate) and returns a boolean indicating whether or not a save is required."""
+        return False
+
+    def do_m2m_update(self, match, m2m_relations):
+        return  # no update
+
+
+class NestedSaveListSerializer(serializers.ListSerializer):
+    """Need a special save() method that cascades to the list of child instances"""
+
+    def save(self, **kwargs):
+        """
+        Save and return a list of object instances.
+        """
+        # Guard against incorrect use of `serializer.save(commit=False)`
+        assert 'commit' not in kwargs, (
+            "'commit' is not a valid keyword argument to the 'save()' method. "
+            "If you need to access data before committing to the database then "
+            "inspect 'serializer.validated_data' instead. "
+            "You can also pass additional keyword arguments to 'save()' if you "
+            "need to set extra attributes on the saved model instance. "
+            "For example: 'serializer.save(owner=request.user)'.'"
+        )
+
+        new_values = []
+
+        for item in self._validated_data:
+            # integrate save kwargs
+            self.child._validated_data = item
+            # since we reuse the serializer, we need to re-inject the new _validated_data using save kwargs
+            new_values.append(self.child.save(**kwargs))
+
+        return new_values
+
+    def run_validation(self, data=empty):
+        """Since a nested serializer is treated like a Field, `is_valid` will not be called so we need to set
+        _validated_data in the mixin."""
+        self._validated_data = super(NestedSaveListSerializer, self).run_validation(data)
+        return self._validated_data
+
+
+class NestedSaveSerializer(RelatedSaveMixin, FocalSaveMixin):
+    """Provides a general framework for nested serializers including argument validation."""
+
+    default_list_serializer = NestedSaveListSerializer
+    DEFAULT_MATCH_ON = ['pk']
+    queryset = None
+
+    @classmethod
+    def many_init(cls, *args, **kwargs):
+        # inject the default into list_serializer_class (if not present)
+        meta = getattr(cls, 'Meta', None)
+        if meta is None:
+            class Meta:
+                pass
+            meta = Meta
+            setattr(cls, 'Meta', meta)
+        list_serializer_class = getattr(meta, 'list_serializer_class', None)
+        if list_serializer_class is None:
+            setattr(meta, 'list_serializer_class', cls.default_list_serializer)
+        assert issubclass(meta.list_serializer_class, NestedSaveListSerializer), \
+            "NestedSaveMixin expects a NestedSaveListSerializer for correct save behavior.  Please override " \
+            "default_list_serializer or Meta.list_serializer_class and provide an appropriate class."
+        return super(NestedSaveSerializer, cls).many_init(*args, **kwargs)
+
+    def __init__(self, *args, **kwargs):
+        self.queryset = kwargs.pop('queryset', self.queryset)
+        if self.queryset is None and hasattr(self, 'Meta') and hasattr(self.Meta, 'model'):
+            self.queryset = self.Meta.model.objects.all()
+        assert self.queryset is not None, \
+            "NestedSerializerBase requires a Meta.model, a `queryset` on the Serializer, or a `queryset` kwarg"
+        self.match_on = kwargs.pop('match_on', self.DEFAULT_MATCH_ON)
+        assert self.match_on == '__all__' or isinstance(self.match_on, (tuple, list, set)), \
+            "match_on only accepts as Collection of strings or the special value __all__"
+        if isinstance(self.match_on, (tuple, list, set)):
+            for match in self.match_on:
+                assert isinstance(match, str), "match_on collection can only contain strings"
+        super(NestedSaveSerializer, self).__init__(*args, **kwargs)
+
+    def run_validation(self, data=empty):
+        """A nested serializer is treated like a Field so `is_valid` will not be called and `_validated_data` not set."""
+        # ensure Unique and UniqueTogether don't collide with a DB match
+        validators = self.remove_validation_unique()
+        self._validated_data = super(NestedSaveSerializer, self).run_validation(data)
+        # restore Unique or UniqueTogether
+        self.restore_validation_unique(validators)
+        return self._validated_data
+
+    def remove_validation_unique(self):
+        """
+        Removes unique validators from a serializers.  This is critical for get-or-create style serialization.  It can also
+        be used to distinguish 409 errors from client-side validation errors.
+        """
+        fields = {}
+        # extract unique validators
+        for name, field in self.fields.items():
+            fields[name] = []
+            if not hasattr(field, 'validators'):
+                continue
+            for validator in field.validators:
+                if isinstance(validator, UniqueValidator):
+                    fields[name].append(validator)
+            for validator in fields[name]:
+                field.validators.remove(validator)
+        # extract unique_together validators
+        fields['_'] = []
+        for validator in self.validators:
+            if isinstance(validator, UniqueTogetherValidator):
+                fields['_'].append(validator)
+        for validator in fields['_']:
+            self.validators.remove(validator)
+        return fields
+
+    def restore_validation_unique(self, unique_validators):
+        together_validators = unique_validators.pop('_')
+        for serializer in together_validators:
+            self.validators.append(serializer)
+        fields = self.fields
+        for name, validators in unique_validators.items():
+            for validator in validators:
+                fields[name].validators.append(validator)
+
+    def update(self, instance, validated_data):
+        raise KeyError(
+            "Update should never be called on a NestedSerializerBase.  Make sure parent object uses NestedSaveMixin")
+
+    def create(self, validated_data):
+        raise KeyError(
+            "Update should never be called on a NestedSerializerBase.  Make sure parent object uses NestedSaveMixin")
+
+
+class UpdateDoSaveMixin(NestedSaveSerializer):
+
+    def do_update(self, match, create_values):
+        for k, v in create_values.items():
+            setattr(match, k, v)
+        return True
+
+    def do_m2m_update(self, match, m2m_relations):
+        # assign relations to forward many-to-many fields
+        for k, v in m2m_relations.items():
+            getattr(match, k).add(v)
+
+
+class GetOnlyNestedSerializerMixin(NestedSaveSerializer):
+    """Gets (without updating) requetsed object or fails."""
+
+    def do_save(self, match_on, create_values):
+        return self.queryset.select_for_update().get(**match_on), False
+
+
+class UpdateOnlyNestedSerializerMixin(UpdateDoSaveMixin, GetOnlyNestedSerializerMixin):
+    """Gets requested object (or fails) and updates object."""
+
+
+class GetOrCreateNestedSerializerMixin(GetOnlyNestedSerializerMixin):
+    """Gets (without updating) or creates requested object."""
+
+    def do_save(self, match_on, create_values):
+        try:
+            return super(GetOrCreateNestedSerializerMixin, self).do_save(match_on, create_values)
+        except self.queryset.model.DoesNotExist:
+            return self.queryset.model(**create_values), True
+
+
+class UpdateOrCreateNestedSerializerMixin(UpdateDoSaveMixin, GetOrCreateNestedSerializerMixin):
+    """Gets (without updating) or creates requested object."""
+
+
+class CreateOnlyNestedSerializerMixin(NestedSaveSerializer):
+    """Creates requested object or fails."""
+
+    def do_save(self, match_on, create_values):
+        return self.queryset.model(**create_values), True
