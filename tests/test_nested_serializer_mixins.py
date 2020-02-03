@@ -526,3 +526,36 @@ class ContextConductionTest(TestCase):
             "Serializer should have been valid:  {}".format(serializer.errors)
         )
         serializer.save()
+
+
+##################
+# Wildcard Source
+##################
+class WildcardParentRelatedSaveSerializer(mixins.RelatedSaveMixin, serializers.Serializer):
+    class Meta:
+        fields = '__all__'
+    # makes the current class a pass-through
+    parent = GenericParentRelatedSaveSerializer(source='*')
+
+    def create(self, validated_data):
+        # "container only", no create logic
+        return validated_data
+
+
+class WildcardSourceSerializerTest(TestCase):
+
+    def test_wildcard_source(self):
+        """Wildcard sources should be processed correctly"""
+        data = {
+            "child": {
+                "name": "test",
+            }
+        }
+
+        serializer = GenericParentRelatedSaveSerializer(data=data)
+        valid = serializer.is_valid()
+        self.assertTrue(
+            valid,
+            "Serializer should have been valid:  {}".format(serializer.errors)
+        )
+        serializer.save()
