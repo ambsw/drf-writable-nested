@@ -539,6 +539,7 @@ class RelatedSaveMixin(FieldLookupMixin):
                 continue
             # reinject validated_data
             field._validated_data = self._validated_data[field_name]
+            # we need to pop from kwargs so the value doesn't "overwrite" _validated_data later
             self._validated_data[field_name] = field.save(**kwargs.pop(field_name, {}))
 
     def _save_reverse_relations(self, instance, kwargs):
