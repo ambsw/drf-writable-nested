@@ -11,15 +11,21 @@ class LookupChild(models.Model):
 
 class LookupParent(models.Model):
     child = models.ForeignKey(LookupChild, on_delete=models.CASCADE)
-
-
-class LookupGrandParent(models.Model):
-    child = models.ForeignKey(LookupParent, on_delete=models.CASCADE)
+    child2 = models.ForeignKey(LookupChild, on_delete=models.CASCADE)
 
 
 class LookupReverseChild(models.Model):
     name = models.TextField()
     parent = models.ForeignKey(LookupParent, on_delete=models.CASCADE, related_name='children')
+
+
+class LookupOneToOneChild(models.Model):
+    name = models.TextField()
+    parent = models.OneToOneField(LookupParent, on_delete=models.CASCADE, related_name='one_to_one')
+
+
+class LookupGrandParent(models.Model):
+    child = models.ForeignKey(LookupParent, on_delete=models.CASCADE)
 
 
 class ChildSerializer(mixins.FieldLookupMixin, serializers.ModelSerializer):
@@ -34,13 +40,36 @@ class ReverseChildSerializer(mixins.FieldLookupMixin, serializers.ModelSerialize
         fields = '__all__'
 
 
+class OneToOneChildSerializer(mixins.FieldLookupMixin, serializers.ModelSerializer):
+    class Meta:
+        model = LookupOneToOneChild
+        fields = '__all__'
+
+
 class ParentSerializer(mixins.FieldLookupMixin, serializers.ModelSerializer):
     class Meta:
         model = LookupParent
-        fields = '__all__'
+        # otherwise child2 will get created by the ModelSerializer (and duplicate child_source)
+        exclude = ['child2']
     # source of a 1:many relationship
     child = ChildSerializer()
+    child_source = ChildSerializer(source='child2')
     children = ReverseChildSerializer(many=True)
+    one_to_one = OneToOneChildSerializer()
+
+
+class NestedParentSerializer(mixins.FieldLookupMixin, serializers.ModelSerializer):
+    class Meta:
+        model = LookupParent
+        fields = '__all__'
+
+
+class OneToOneForwardSerializer(mixins.FieldLookupMixin, serializers.ModelSerializer):
+    class Meta:
+        model = LookupOneToOneChild
+        fields = '__all__'
+
+    parent = NestedParentSerializer
 
 
 class GrandParentSerializer(mixins.FieldLookupMixin, serializers.ModelSerializer):
@@ -51,9 +80,69 @@ class GrandParentSerializer(mixins.FieldLookupMixin, serializers.ModelSerializer
     child = ParentSerializer()
 
 
+class GetModelFieldTest(TestCase):
+    """Field types are determined by accessing the model.  These test confirm that the methods for identifying these
+    fields do not change."""
+
+    def test_fk(self):
+        """Confirm that the test works correctly for fields with a source value"""
+        serializer = ParentSerializer()
+        model_field = serializer._get_model_field(serializer.fields['child'].source)
+        self.assertIsInstance(
+            model_field,
+            models.ForeignKey,
+            "Found {}, expected ForeignKey".format(print(type(model_field)))
+        )
+
+    def test_fk_source(self):
+        """Confirm that the test works correctly for fields with a source value"""
+        serializer = ParentSerializer()
+        model_field = serializer._get_model_field(serializer.fields['child_source'].source)
+        self.assertIsInstance(
+            model_field,
+            models.ForeignKey,
+            "Found {}, expected ForeignKey".format(print(type(model_field)))
+        )
+
+    def test_reverse_fk(self):
+        """Confirm that a reverse ForeignKey is a ManyToOneRel"""
+        serializer = ParentSerializer()
+        model_field = serializer._get_model_field(serializer.fields['children'].source)
+        # opposite side of a ForeignKeyField is a ManyToOneRel
+        self.assertIsInstance(
+            model_field,
+            models.ManyToOneRel,
+            "Found {}, expected ManyToOneRel".format(print(type(model_field)))
+        )
+
+    def test_onetoone_reverse(self):
+        """A reverse OneToOne relationship is a OneToOneRel"""
+        serializer = ParentSerializer()
+        model_field = serializer._get_model_field(serializer.fields['one_to_one'].source)
+        # opposite side of a OneToOneField is a ManyToOne
+        self.assertIsInstance(
+            model_field,
+            models.OneToOneRel,
+            "Found {}, expected OneToOneRel".format(type(model_field))
+        )
+
+    def test_onetoone_forward(self):
+        """A forward OneToOne relationship is a OneToOneField"""
+        serializer = OneToOneForwardSerializer()
+        model_field = serializer._get_model_field(serializer.fields['parent'].source)
+        # opposite side of a OneToOneField is a ManyToOne
+        self.assertIsInstance(
+            model_field,
+            models.OneToOneField,
+            "Found {}, expected OneToOneRel".format(type(model_field))
+        )
+
+
 class FieldTypesTest(TestCase):
+    """Tests resolution of field types.  ID is always read-only."""
 
     def test_field_types_grandparent(self):
+        """Nested serializer should be direct"""
         serializer = GrandParentSerializer()
         self.assertEqual(
             {
@@ -64,28 +153,46 @@ class FieldTypesTest(TestCase):
         )
 
     def test_field_types_parent(self):
-        serializer = GrandParentSerializer()
+        """Reverse one-to-one and reverse FK should be classified as Reverse"""
+        serializer = ParentSerializer()
         self.assertEqual(
             {
                 'id': serializer.TYPE_READ_ONLY,
                 'child': serializer.TYPE_DIRECT,
+                'child_source': serializer.TYPE_DIRECT,
                 'children': serializer.TYPE_REVERSE,
+                'one_to_one': serializer.TYPE_REVERSE,
             },
-            serializer.fields['child'].field_types
+            serializer.field_types
+        )
+
+    def test_field_sources_parent(self):
+        """Reverse one-to-one and reverse FK should be classified as Reverse"""
+        serializer = ParentSerializer()
+        self.assertEqual(
+            {
+                'id': serializer.TYPE_READ_ONLY,
+                'child': serializer.TYPE_DIRECT,
+                'child2': serializer.TYPE_DIRECT,
+                'children': serializer.TYPE_REVERSE,
+                'one_to_one': serializer.TYPE_REVERSE,
+            },
+            serializer.field_sources
         )
 
     def test_field_types_child(self):
-        serializer = GrandParentSerializer()
+        """"""
+        serializer = ChildSerializer()
         self.assertEqual(
             {
                 'id': serializer.TYPE_READ_ONLY,
                 'name': serializer.TYPE_LOCAL,
             },
-            serializer.fields['child'].fields['child'].field_types
+            serializer.field_types
         )
 
     def test_field_types_reversechild(self):
-        serializer = GrandParentSerializer()
+        serializer = ReverseChildSerializer()
         self.assertEqual(
             {
                 'id': serializer.TYPE_READ_ONLY,
@@ -93,18 +200,17 @@ class FieldTypesTest(TestCase):
                 # must have a nested serializer to be "direct" otherwise it's just a local value
                 'parent': serializer.TYPE_LOCAL,
             },
-            serializer.fields['child'].fields['children'].child.field_types
+            serializer.field_types
         )
 
-
-class GetModelFieldTest(TestCase):
-
-    def test_reverse(self):
-        serializer = ParentSerializer()
-        model_field = serializer._get_model_field('children')
-        print(type(model_field))
-        # opposite side of a ForeignKey is a ManyToOne
-        self.assertIsInstance(
-            model_field,
-            models.ManyToOneRel,
+    def test_field_types_onetoonechild(self):
+        serializer = OneToOneChildSerializer()
+        self.assertEqual(
+            {
+                'id': serializer.TYPE_READ_ONLY,
+                'name': serializer.TYPE_LOCAL,
+                # must have a nested serializer to be "direct" otherwise it's just a local value
+                'parent': serializer.TYPE_LOCAL,
+            },
+            serializer.field_types
         )
