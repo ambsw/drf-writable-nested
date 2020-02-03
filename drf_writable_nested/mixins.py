@@ -541,26 +541,6 @@ class RelatedSaveMixin(FieldLookupMixin):
             field._validated_data = self._validated_data[field_name]
             self._validated_data[field_name] = field.save(**kwargs.pop(field_name, {}))
 
-    def _extract_reverse_relations(self, kwargs):
-        """Removes revere relations from _validated_data to avoid FK integrity issues"""
-        # Remove related fields from validated data for future manipulations
-        related_objects = []
-        for field_name, field in self.fields.items():
-            if self.field_types[field_name] != self.TYPE_REVERSE:
-                continue
-            if not isinstance(self._validated_data, dict) or field_name not in self._validated_data:
-                continue
-            serializer = field
-            if isinstance(serializer, serializers.ListSerializer):
-                serializer = serializer.child
-            if isinstance(serializer, serializers.ModelSerializer):
-                related_objects.append((
-                    field,
-                    self._validated_data.pop(field.source),
-                    kwargs.get(field_name, {}),
-                ))
-        return related_objects
-
     def _save_reverse_relations(self, instance, kwargs):
         """Inject the current object as the FK in the reverse related objects and save them"""
         for field_name, field in self.fields.items():
