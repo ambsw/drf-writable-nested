@@ -1,9 +1,7 @@
-from unittest import mock
-
 from django.conf import settings
 from django.contrib.auth import get_user_model
 from django.db import models
-from django.test import TestCase
+from django.test import TestCase, RequestFactory
 from rest_framework import serializers
 
 from drf_writable_nested import mixins
@@ -455,9 +453,12 @@ class ContextConductionTest(TestCase):
             }
         }
 
+        request = RequestFactory()
+        request.user = self.user
+
         serializer = GenericContextGrandParentSerializer(data=data)
         serializer._context = {
-            'request': mock.Mock(user=self.user)
+            'request': request
         }
         valid = serializer.is_valid()
         self.assertTrue(
