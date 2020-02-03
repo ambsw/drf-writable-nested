@@ -14,7 +14,7 @@ class Child(models.Model):
     name = models.TextField()
 
 
-class ChildSerializer(mixins.GetOrCreateNestedSerializerMixin, serializers.ModelSerializer):
+class ChildGetOrCreateSerializer(mixins.GetOrCreateNestedSerializerMixin, serializers.ModelSerializer):
     DEFAULT_MATCH_ON = ['name']
 
     class Meta:
@@ -22,11 +22,11 @@ class ChildSerializer(mixins.GetOrCreateNestedSerializerMixin, serializers.Model
         fields = '__all__'
 
 
-class GenericParentSerializer(mixins.RelatedSaveMixin, serializers.Serializer):
+class GenericParentRelatedSaveSerializer(mixins.RelatedSaveMixin, serializers.Serializer):
     class Meta:
         fields = '__all__'
     # source of a 1:many relationship
-    child = ChildSerializer()
+    child = ChildGetOrCreateSerializer()
 
     def create(self, validated_data):
         # "container only", no create logic
@@ -44,20 +44,20 @@ class ParentMany(models.Model):
     children = models.ManyToManyField(Child)
 
 
-class ParentSerializer(mixins.RelatedSaveMixin, serializers.ModelSerializer):
+class ParentRelatedSaveSerializer(mixins.RelatedSaveMixin, serializers.ModelSerializer):
     class Meta:
         model = Parent
         fields = '__all__'
     # source of a 1:many relationship
-    child = ChildSerializer()
+    child = ChildGetOrCreateSerializer()
 
 
-class ParentManySerializer(mixins.RelatedSaveMixin, serializers.ModelSerializer):
+class ParentManyRelatedSaveSerializer(mixins.RelatedSaveMixin, serializers.ModelSerializer):
     class Meta:
         model = ParentMany
         fields = '__all__'
     # source of a m2m relationship
-    children = ChildSerializer(many=True)
+    children = ChildGetOrCreateSerializer(many=True)
 
 
 ###################
@@ -81,7 +81,7 @@ class ReverseManyChild(models.Model):
     parent = models.ManyToManyField(ReverseManyParent, related_name='children')
 
 
-class ReverseChildSerializer(mixins.GetOrCreateNestedSerializerMixin, serializers.ModelSerializer):
+class ReverseChildGetOrCreateSerializer(mixins.GetOrCreateNestedSerializerMixin, serializers.ModelSerializer):
     DEFAULT_MATCH_ON = ['name']
 
     class Meta:
@@ -89,7 +89,7 @@ class ReverseChildSerializer(mixins.GetOrCreateNestedSerializerMixin, serializer
         fields = '__all__'
 
 
-class ReverseManyChildSerializer(mixins.GetOrCreateNestedSerializerMixin, serializers.ModelSerializer):
+class ReverseManyChildGetOrCreateSerializer(mixins.GetOrCreateNestedSerializerMixin, serializers.ModelSerializer):
     DEFAULT_MATCH_ON = ['name']
 
     class Meta:
@@ -97,20 +97,20 @@ class ReverseManyChildSerializer(mixins.GetOrCreateNestedSerializerMixin, serial
         fields = '__all__'
 
 
-class ReverseParentSerializer(mixins.RelatedSaveMixin, serializers.ModelSerializer):
+class ReverseParentRelatedSaveSerializer(mixins.RelatedSaveMixin, serializers.ModelSerializer):
     class Meta:
         model = ReverseParent
         fields = '__all__'
     # target of a 1:many relationship
-    children = ReverseChildSerializer(many=True)
+    children = ReverseChildGetOrCreateSerializer(many=True)
 
 
-class ReverseManyParentSerializer(mixins.RelatedSaveMixin, serializers.ModelSerializer):
+class ReverseManyParentRelatedSaveSerializer(mixins.RelatedSaveMixin, serializers.ModelSerializer):
     class Meta:
         model = ReverseManyParent
         fields = '__all__'
     # target of a m2m relationship
-    children = ReverseManyChildSerializer(many=True)
+    children = ReverseManyChildGetOrCreateSerializer(many=True)
 
 
 class WritableNestedModelSerializerTest(TestCase):
@@ -122,7 +122,7 @@ class WritableNestedModelSerializerTest(TestCase):
             }
         }
 
-        serializer = GenericParentSerializer(data=data)
+        serializer = GenericParentRelatedSaveSerializer(data=data)
         valid = serializer.is_valid()
         self.assertTrue(
             valid,
@@ -138,7 +138,7 @@ class WritableNestedModelSerializerTest(TestCase):
             }
         }
 
-        serializer = GenericParentSerializer(data=data)
+        serializer = GenericParentRelatedSaveSerializer(data=data)
         valid = serializer.is_valid()
         self.assertTrue(
             valid,
@@ -146,7 +146,7 @@ class WritableNestedModelSerializerTest(TestCase):
         )
         serializer.save()
 
-        serializer = GenericParentSerializer(data=data)
+        serializer = GenericParentRelatedSaveSerializer(data=data)
         valid = serializer.is_valid()
         self.assertTrue(
             valid,
@@ -166,7 +166,7 @@ class WritableNestedModelSerializerTest(TestCase):
             }
         }
 
-        serializer = ParentSerializer(data=data)
+        serializer = ParentRelatedSaveSerializer(data=data)
         valid = serializer.is_valid()
         self.assertTrue(
             valid,
@@ -182,7 +182,7 @@ class WritableNestedModelSerializerTest(TestCase):
             }
         }
 
-        serializer = ParentSerializer(data=data)
+        serializer = ParentRelatedSaveSerializer(data=data)
         valid = serializer.is_valid()
         self.assertTrue(
             valid,
@@ -190,7 +190,7 @@ class WritableNestedModelSerializerTest(TestCase):
         )
         serializer.save()
 
-        serializer = ParentSerializer(data=data)
+        serializer = ParentRelatedSaveSerializer(data=data)
         valid = serializer.is_valid()
         self.assertTrue(
             valid,
@@ -215,7 +215,7 @@ class WritableNestedModelSerializerTest(TestCase):
             }]
         }
 
-        serializer = ParentManySerializer(data=data)
+        serializer = ParentManyRelatedSaveSerializer(data=data)
         valid = serializer.is_valid()
         self.assertTrue(
             valid,
@@ -231,7 +231,7 @@ class WritableNestedModelSerializerTest(TestCase):
             }]
         }
 
-        serializer = ParentManySerializer(data=data)
+        serializer = ParentManyRelatedSaveSerializer(data=data)
         valid = serializer.is_valid()
         self.assertTrue(
             valid,
@@ -239,7 +239,7 @@ class WritableNestedModelSerializerTest(TestCase):
         )
         serializer.save()
 
-        serializer = ParentManySerializer(data=data)
+        serializer = ParentManyRelatedSaveSerializer(data=data)
         valid = serializer.is_valid()
         self.assertTrue(
             valid,
@@ -259,7 +259,7 @@ class WritableNestedModelSerializerTest(TestCase):
             }]
         }
 
-        serializer = ReverseParentSerializer(data=data)
+        serializer = ReverseParentRelatedSaveSerializer(data=data)
         valid = serializer.is_valid()
         self.assertTrue(
             valid,
@@ -275,7 +275,7 @@ class WritableNestedModelSerializerTest(TestCase):
             }]
         }
 
-        serializer = ReverseParentSerializer(data=data)
+        serializer = ReverseParentRelatedSaveSerializer(data=data)
         valid = serializer.is_valid()
         self.assertTrue(
             valid,
@@ -283,7 +283,7 @@ class WritableNestedModelSerializerTest(TestCase):
         )
         serializer.save()
 
-        serializer = ReverseParentSerializer(data=data)
+        serializer = ReverseParentRelatedSaveSerializer(data=data)
         valid = serializer.is_valid()
         self.assertTrue(
             valid,
@@ -308,7 +308,7 @@ class WritableNestedModelSerializerTest(TestCase):
             }]
         }
 
-        serializer = ReverseManyParentSerializer(data=data)
+        serializer = ReverseManyParentRelatedSaveSerializer(data=data)
         valid = serializer.is_valid()
         self.assertTrue(
             valid,
@@ -324,7 +324,7 @@ class WritableNestedModelSerializerTest(TestCase):
             }]
         }
 
-        serializer = ReverseManyParentSerializer(data=data)
+        serializer = ReverseManyParentRelatedSaveSerializer(data=data)
         valid = serializer.is_valid()
         self.assertTrue(
             valid,
@@ -332,7 +332,7 @@ class WritableNestedModelSerializerTest(TestCase):
         )
         serializer.save()
 
-        serializer = ReverseManyParentSerializer(data=data)
+        serializer = ReverseManyParentRelatedSaveSerializer(data=data)
         valid = serializer.is_valid()
         self.assertTrue(
             valid,
@@ -353,20 +353,20 @@ class GrandParent(models.Model):
     child = models.ForeignKey(Parent, on_delete=models.CASCADE)
 
 
-class NestedParentSerializer(mixins.GetOrCreateNestedSerializerMixin, serializers.ModelSerializer):
+class NestedParentGetOrCreateSerializer(mixins.GetOrCreateNestedSerializerMixin, serializers.ModelSerializer):
     class Meta:
         model = Parent
         fields = '__all__'
     # source of a 1:many relationship
-    child = ChildSerializer()
+    child = ChildGetOrCreateSerializer()
 
 
-class GrandParentSerializer(mixins.RelatedSaveMixin, serializers.ModelSerializer):
+class GrandParentRelatedSaveSerializer(mixins.RelatedSaveMixin, serializers.ModelSerializer):
     class Meta:
         model = GrandParent
         fields = '__all__'
     # source of a 1:many relationship
-    child = NestedParentSerializer()
+    child = NestedParentGetOrCreateSerializer()
 
 
 class NestedWritableNestedModelSerializerTest(TestCase):
@@ -380,7 +380,7 @@ class NestedWritableNestedModelSerializerTest(TestCase):
             }
         }
 
-        serializer = GrandParentSerializer(data=data)
+        serializer = GrandParentRelatedSaveSerializer(data=data)
         valid = serializer.is_valid()
         self.assertTrue(
             valid,
@@ -404,6 +404,66 @@ class NestedWritableNestedModelSerializerTest(TestCase):
         )
 
 
+##############
+# Create Only
+##############
+
+class ChildCreateOnlySerializer(mixins.CreateOnlyNestedSerializerMixin, serializers.ModelSerializer):
+    DEFAULT_MATCH_ON = ['name']
+
+    class Meta:
+        model = Child
+        fields = '__all__'
+
+
+class ParentRelatedSaveSerializerCreateOnly(mixins.RelatedSaveMixin, serializers.Serializer):
+    class Meta:
+        fields = '__all__'
+    # source of a 1:many relationship
+    child = ChildCreateOnlySerializer()
+
+    def create(self, validated_data):
+        # "container only", no create logic
+        return validated_data
+
+
+class CreateOnlyModelSerializerTest(TestCase):
+
+    def test_create_despite_match(self):
+        """Create Only serializers will not match an existing object (despite match_on)"""
+        data = {
+            "child": {
+                "name": "test",
+            }
+        }
+
+        serializer = ParentRelatedSaveSerializerCreateOnly(data=data)
+        valid = serializer.is_valid()
+        self.assertTrue(
+            valid,
+            "Serializer should have been valid:  {}".format(serializer.errors)
+        )
+        serializer.save()
+
+        self.assertEqual(
+            1,
+            Child.objects.count()
+        )
+
+        serializer = ParentRelatedSaveSerializerCreateOnly(data=data)
+        valid = serializer.is_valid()
+        self.assertTrue(
+            valid,
+            "Serializer should have been valid:  {}".format(serializer.errors)
+        )
+        serializer.save()
+
+        self.assertEqual(
+            2,
+            Child.objects.count()
+        )
+
+
 #####################
 # Context Conduction
 #####################
@@ -412,7 +472,7 @@ class ContextChild(models.Model):
     owner = models.ForeignKey(settings.AUTH_USER_MODEL, on_delete=models.CASCADE)
 
 
-class ContextChildSerializer(mixins.GetOrCreateNestedSerializerMixin, serializers.ModelSerializer):
+class ContextChildGetOrCreateSerializer(mixins.GetOrCreateNestedSerializerMixin, serializers.ModelSerializer):
     class Meta:
         model = ContextChild
         fields = '__all__'
@@ -423,16 +483,16 @@ class ContextChildSerializer(mixins.GetOrCreateNestedSerializerMixin, serializer
         }
 
 
-class GenericContextParentSerializer(mixins.RelatedSaveMixin):
-    child = ContextChildSerializer()
+class GenericContextParentRelatedSaveSerializer(mixins.RelatedSaveMixin):
+    child = ContextChildGetOrCreateSerializer()
 
     def create(self, validated_data):
         # "container only", no create logic
         return validated_data
 
 
-class GenericContextGrandParentSerializer(mixins.RelatedSaveMixin):
-    child = GenericContextParentSerializer()
+class GenericContextGrandParentRelatedSaveSerializer(mixins.RelatedSaveMixin):
+    child = GenericContextParentRelatedSaveSerializer()
 
     def create(self, validated_data):
         # "container only", no create logic
@@ -456,7 +516,7 @@ class ContextConductionTest(TestCase):
         request = RequestFactory()
         request.user = self.user
 
-        serializer = GenericContextGrandParentSerializer(data=data)
+        serializer = GenericContextGrandParentRelatedSaveSerializer(data=data)
         serializer._context = {
             'request': request
         }
