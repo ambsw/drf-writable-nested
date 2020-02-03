@@ -128,7 +128,23 @@ class WritableNestedModelSerializerTest(TestCase):
             valid,
             "Serializer should have been valid:  {}".format(serializer.errors)
         )
-        serializer.save()
+        instance = serializer.save()
+        self.assertIsInstance(
+            instance,
+            dict,
+        )
+        self.assertIn(
+            'child',
+            instance,
+        )
+        self.assertIsInstance(
+            instance['child'],
+            Child,
+        )
+        self.assertEqual(
+            'test',
+            instance['child'].name,
+        )
 
     def test_generic_nested_get(self):
         """A second run with a GetOrCreate nested serializer should find same child object (by name)"""
@@ -403,6 +419,24 @@ class NestedWritableNestedModelSerializerTest(TestCase):
             Child.objects.count(),
         )
 
+        instance = serializer.save()
+        self.assertIsInstance(
+            instance,
+            GrandParent,
+        )
+        self.assertIsInstance(
+            instance.child,
+            Parent,
+        )
+        self.assertIsInstance(
+            instance.child.child,
+            Child,
+        )
+        self.assertEqual(
+            'test',
+            instance.child.child.name,
+        )
+
 
 ##############
 # Create Only
@@ -558,4 +592,82 @@ class WildcardSourceSerializerTest(TestCase):
             valid,
             "Serializer should have been valid:  {}".format(serializer.errors)
         )
-        serializer.save()
+        instance = serializer.save()
+        self.assertIsInstance(
+            instance,
+            dict,
+        )
+        self.assertIn(
+            'child',
+            instance,
+        )
+        self.assertIsInstance(
+            instance['child'],
+            Child,
+        )
+        self.assertEqual(
+            'test',
+            instance['child'].name,
+        )
+
+
+###########
+# OneToOne
+###########
+class NewUser (models.Model):
+    username = models.TextField()
+
+
+class NewProfile(models.Model):
+    user = models.OneToOneField(NewUser, on_delete=models.CASCADE, related_name='profile')
+    age = models.IntegerField()
+
+
+class ProfileSerializer(mixins.GetOrCreateNestedSerializerMixin, serializers.ModelSerializer):
+    class Meta:
+        model = NewProfile
+        fields = '__all__'
+
+
+class UserSerializer(mixins.RelatedSaveMixin, serializers.ModelSerializer):
+    class Meta:
+        model = NewUser
+        fields = '__all__'
+    # makes the current class a pass-through
+    profile = ProfileSerializer()
+
+
+class OneToOneSerializerTest(TestCase):
+
+    def test_onetoone_source(self):
+        """Wildcard sources should be processed correctly"""
+        data = {
+            "username": "test user",
+            "profile": {
+                "age": 50,
+            }
+        }
+
+        serializer = UserSerializer(data=data)
+        valid = serializer.is_valid()
+        self.assertTrue(
+            valid,
+            "Serializer should have been valid:  {}".format(serializer.errors)
+        )
+        instance = serializer.save()
+        self.assertIsInstance(
+            instance,
+            NewUser,
+        )
+        self.assertEqual(
+            "test user",
+            instance.username,
+        )
+        self.assertIsInstance(
+            instance.profile,
+            NewProfile,
+        )
+        self.assertEqual(
+            50,
+            instance.profile.age,
+        )

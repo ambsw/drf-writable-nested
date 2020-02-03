@@ -4,8 +4,8 @@ from collections import OrderedDict, defaultdict
 from django.contrib.contenttypes.fields import GenericRelation
 from django.contrib.contenttypes.models import ContentType
 from django.db import transaction
-from django.db.models import ProtectedError, FieldDoesNotExist
-from django.db.models.fields.related import ForeignObjectRel
+from django.db.models import ProtectedError, FieldDoesNotExist, OneToOneRel
+from django.db.models.fields.related import ForeignObjectRel, OneToOneField
 from django.utils.translation import ugettext_lazy as _
 from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
@@ -454,6 +454,13 @@ class FieldLookupMixin(serializers.Serializer):
     TYPE_REVERSE = 'reverse'
 
     _cache_field_types = None
+    _cache_field_sources = None
+
+    @property
+    def field_sources(self):
+        if self._cache_field_sources is None:
+            self._populate_field_types()
+        return self._cache_field_sources
 
     @property
     def field_types(self):
@@ -463,21 +470,29 @@ class FieldLookupMixin(serializers.Serializer):
 
     def _populate_field_types(self):
         self._cache_field_types = {}
+        self._cache_field_sources = {}
         for field_name, field in self.fields.items():
             if field.read_only:
                 self._cache_field_types[field_name] = self.TYPE_READ_ONLY
+                self._cache_field_sources[field.source] = self.TYPE_READ_ONLY
                 continue
             if not isinstance(field, BaseSerializer):
                 self._cache_field_types[field_name] = self.TYPE_LOCAL
+                self._cache_field_sources[field.source] = self.TYPE_LOCAL
                 continue
             if field.source == '*':
                 self._cache_field_types[field_name] = self.TYPE_DIRECT
                 continue
-            related_field = self._get_model_field(field.source)
-            if isinstance(related_field, ForeignObjectRel):
+            model_field = self._get_model_field(field.source)
+            if isinstance(model_field, OneToOneRel):
                 self._cache_field_types[field_name] = self.TYPE_REVERSE
+                self._cache_field_sources[field.source] = self.TYPE_REVERSE
+            if isinstance(model_field, ForeignObjectRel):
+                self._cache_field_types[field_name] = self.TYPE_REVERSE
+                self._cache_field_sources[field.source] = self.TYPE_REVERSE
                 continue
             self._cache_field_types[field_name] = self.TYPE_DIRECT
+            self._cache_field_sources[field.source] = self.TYPE_DIRECT
 
 
 class RelatedSaveMixin(FieldLookupMixin):
@@ -490,6 +505,7 @@ class RelatedSaveMixin(FieldLookupMixin):
     _is_saved = False
 
     def run_validation(self, data=empty):
+        """Cache nested call to `to_representation` on _validate_data for use when saving."""
         self._validated_data = super(RelatedSaveMixin, self).run_validation(data)
         self._errors = {}
         return self._validated_data
@@ -500,7 +516,7 @@ class RelatedSaveMixin(FieldLookupMixin):
         return super(RelatedSaveMixin, self).to_internal_value(data)
 
     def _make_reverse_relations_valid(self):
-        """Make the reverse field optional since we may not have a key for the base object."""
+        """Make the reverse ForeignKey field optional since we may not have a key for the base object yet."""
         for field_name, field in self.fields.items():
             if self.field_types[field_name] != self.TYPE_REVERSE:
                 continue
@@ -508,19 +524,18 @@ class RelatedSaveMixin(FieldLookupMixin):
             related_field = self._get_model_field(field.source).field
             if isinstance(field, serializers.ListSerializer):
                 field = field.child
-            if isinstance(field, serializers.ModelSerializer):
-                # find the serializer field matching the reverse model relation
-                for sub_field in field.fields.values():
-                    if sub_field.source == related_field.name:
-                        sub_field.required = False
-                        # found the matching field, move on
-                        break
+            # find the serializer field matching the reverse model relation
+            for sub_field in field.fields.values():
+                if sub_field.source == related_field.name:
+                    sub_field.required = False
+                    # found the matching field, move on
+                    break
 
     @property
     def validated_data(self):
         """If mixed into a standard Serializer, prevents `save` from accessing reverse relations"""
         return {k: v for k, v in super(RelatedSaveMixin, self).validated_data.items()
-                if self.field_types[k] != self.TYPE_REVERSE}
+                if k not in self.field_sources or self.field_sources[k] != self.TYPE_REVERSE}
 
     def save(self, **kwargs):
         """We already converted the inputs into a model so we need to save that model"""
@@ -537,9 +552,7 @@ class RelatedSaveMixin(FieldLookupMixin):
                 continue
             if not isinstance(self._validated_data, dict) or field_name not in self._validated_data:
                 continue
-            # reinject validated_data
-            field._validated_data = self._validated_data[field_name]
-            # we need to pop from kwargs so the value doesn't "overwrite" _validated_data later
+            # we need to pop from kwargs so the value doesn't "overwrite" the value put into _validated_data during save
             self._validated_data[field_name] = field.save(**kwargs.pop(field_name, {}))
 
     def _save_reverse_relations(self, instance, kwargs):
@@ -547,19 +560,19 @@ class RelatedSaveMixin(FieldLookupMixin):
         for field_name, field in self.fields.items():
             if self.field_types[field_name] != self.TYPE_REVERSE:
                 continue
-            # inject the instance into validated_data so the *_id field is valid when saved
+            if field_name not in self._validated_data and field_name not in kwargs:
+                continue  # nothing to save
+            # inject the instance into reverse relations so the <parent>_id ForeignKey field is valid when saved
             related_field = self._get_model_field(field.source).field
             if isinstance(field, serializers.ListSerializer):
-                for obj in self._validated_data[field_name]:
+                for obj in field._validated_data:
                     obj[related_field.name] = instance
             elif isinstance(field, serializers.ModelSerializer):
-                self._validated_data[field_name][related_field.name] = instance
+                field._validated_data[related_field.name] = instance
             else:
                 raise Exception("unexpected serializer type")
-
-            # (re)inject validated_data to field
-            field._validated_data = self._validated_data.get(field_name)
-            field.save(**kwargs)
+            # no tests fail if we do not cache this value in _validated_data, but it's consistent with forward relations
+            self._validated_data[field_name] = field.save(**kwargs.get(field_name, {}))
 
 
 class FocalSaveMixin(FieldLookupMixin):
@@ -699,14 +712,14 @@ class NestedSaveSerializer(RelatedSaveMixin, FocalSaveMixin):
         """
         fields = {}
         # extract unique validators
-        for name, field in self.fields.items():
-            fields[name] = []
+        for field_name, field in self.fields.items():
+            fields[field_name] = []
             if not hasattr(field, 'validators'):
                 continue
             for validator in field.validators:
                 if isinstance(validator, UniqueValidator):
-                    fields[name].append(validator)
-            for validator in fields[name]:
+                    fields[field_name].append(validator)
+            for validator in fields[field_name]:
                 field.validators.remove(validator)
         # extract unique_together validators
         fields['_'] = []
