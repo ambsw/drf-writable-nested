@@ -78,7 +78,7 @@ class OneToOneForwardSerializer(mixins.FieldLookupMixin, serializers.ModelSerial
         model = LookupOneToOneChild
         fields = '__all__'
 
-    parent = NestedParentSerializer
+    parent = NestedParentSerializer()
 
 
 class GrandParentSerializer(mixins.FieldLookupMixin, serializers.ModelSerializer):
@@ -260,7 +260,7 @@ class FieldTypesTest(TestCase):
             serializer.field_types
         )
 
-    def test_field_types_onetoonechild(self):
+    def test_field_types_onetoone_reverse(self):
         serializer = OneToOneChildSerializer()
         self.assertEqual(
             {
@@ -268,6 +268,18 @@ class FieldTypesTest(TestCase):
                 'name': serializer.TYPE_LOCAL,
                 # must have a nested serializer to be "direct" otherwise it's just a local value
                 'parent': serializer.TYPE_LOCAL,
+            },
+            serializer.field_types
+        )
+
+    def test_field_types_onetoone_forward(self):
+        serializer = OneToOneForwardSerializer()
+        self.assertEqual(
+            {
+                'id': serializer.TYPE_READ_ONLY,
+                'name': serializer.TYPE_LOCAL,
+                # must have a nested serializer to be "direct" otherwise it's just a local value
+                'parent': serializer.TYPE_DIRECT,
             },
             serializer.field_types
         )
