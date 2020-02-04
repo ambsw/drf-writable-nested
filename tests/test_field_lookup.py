@@ -46,6 +46,15 @@ class OneToOneChildSerializer(mixins.FieldLookupMixin, serializers.ModelSerializ
         fields = '__all__'
 
 
+class M2MTarget(models.Model):
+    name = models.TextField()
+
+
+class M2MSource(models.Model):
+    forward = models.ManyToManyField(M2MTarget, related_name='reverse')
+    name = models.TextField()
+
+
 class ParentSerializer(mixins.FieldLookupMixin, serializers.ModelSerializer):
     class Meta:
         model = LookupParent
@@ -78,6 +87,32 @@ class GrandParentSerializer(mixins.FieldLookupMixin, serializers.ModelSerializer
         fields = '__all__'
     # source of a 1:many relationship
     child = ParentSerializer()
+
+
+class M2MForwardTargetSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = M2MTarget
+        fields = '__all__'
+
+
+class M2MForwardSourceSerializer(mixins.FieldLookupMixin, serializers.ModelSerializer):
+    class Meta:
+        model = M2MSource
+        fields = '__all__'
+    forward = M2MForwardTargetSerializer(many=True)
+
+
+class M2MReverseTargetSerializer(serializers.ModelSerializer):
+    class Meta:
+        model = M2MSource
+        fields = '__all__'
+
+
+class M2MReverseSourceSerializer(mixins.FieldLookupMixin, serializers.ModelSerializer):
+    class Meta:
+        model = M2MTarget
+        fields = '__all__'
+    reverse = M2MReverseTargetSerializer(many=True)
 
 
 class GetModelFieldTest(TestCase):
@@ -135,6 +170,28 @@ class GetModelFieldTest(TestCase):
             model_field,
             models.OneToOneField,
             "Found {}, expected OneToOneRel".format(type(model_field))
+        )
+
+    def test_m2m_reverse(self):
+        """A reverse OneToOne relationship is a OneToOneRel"""
+        serializer = M2MReverseSourceSerializer()
+        model_field = serializer._get_model_field(serializer.fields['reverse'].source)
+        # opposite side of a OneToOneField is a ManyToOne
+        self.assertIsInstance(
+            model_field,
+            models.ManyToManyRel,
+            "Found {}, expected ManyToManyRel".format(type(model_field))
+        )
+
+    def test_m2m_forward(self):
+        """A forward OneToOne relationship is a OneToOneField"""
+        serializer = M2MForwardSourceSerializer()
+        model_field = serializer._get_model_field(serializer.fields['forward'].source)
+        # opposite side of a OneToOneField is a ManyToOne
+        self.assertIsInstance(
+            model_field,
+            models.ManyToManyField,
+            "Found {}, expected ManyToManyField".format(type(model_field))
         )
 
 
