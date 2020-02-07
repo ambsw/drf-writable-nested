@@ -126,7 +126,7 @@ class GetModelFieldTest(TestCase):
         self.assertIsInstance(
             model_field,
             models.ForeignKey,
-            "Found {}, expected ForeignKey".format(print(type(model_field)))
+            "Found {}, expected ForeignKey".format(type(model_field))
         )
 
     def test_fk_source(self):
@@ -136,7 +136,7 @@ class GetModelFieldTest(TestCase):
         self.assertIsInstance(
             model_field,
             models.ForeignKey,
-            "Found {}, expected ForeignKey".format(print(type(model_field)))
+            "Found {}, expected ForeignKey".format(type(model_field))
         )
 
     def test_reverse_fk(self):
@@ -147,7 +147,7 @@ class GetModelFieldTest(TestCase):
         self.assertIsInstance(
             model_field,
             models.ManyToOneRel,
-            "Found {}, expected ManyToOneRel".format(print(type(model_field)))
+            "Found {}, expected ManyToOneRel".format(type(model_field))
         )
 
     def test_onetoone_reverse(self):
