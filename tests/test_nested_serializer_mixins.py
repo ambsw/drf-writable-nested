@@ -7,9 +7,9 @@ from rest_framework import serializers
 from drf_writable_nested import mixins
 
 
-#####################
-# Generic Serializer
-#####################
+#########################
+# GetOrCreate Serializer
+#########################
 class Child(models.Model):
     name = models.TextField()
 
@@ -359,6 +359,26 @@ class WritableNestedModelSerializerTest(TestCase):
         self.assertEqual(
             1,
             ReverseManyChild.objects.count(),
+        )
+
+    def test_reverse_set(self):
+        """We had to implement a workaround because `set` does not work correctly on non-nullable reverse FKs"""
+        parent = ReverseParent()
+        parent.save()
+
+        child1 = ReverseChild(name='test1', parent=parent)
+        child1.save()
+        child2 = ReverseChild(name='test2', parent=parent)
+        child2.save()
+        child3 = ReverseChild(name='test3', parent=parent)
+        child3.save()
+        # set is supposed to remove missing children
+        parent.children.set([child1, child3])
+
+        # if this ever fails (i.e. returns 2), we may be able to rip out the manual reverse-FK update logic
+        self.assertEqual(
+            3,
+            parent.children.count()
         )
 
 
