@@ -650,7 +650,18 @@ class FocalSaveMixin(FieldLookupMixin):
         for field_name, field in self.fields.items():
             if self.match_on == '__all__' or field_name in self.match_on:
                 # build match_on dict
-                match_on[field.source] = kwargs.get(field_name, self._validated_data.get(field.source))
+                if isinstance(field, NestedSaveListSerializer):
+                    # TODO: dress up the list serializer to distinguish IN vs. ALL in match logic
+                    # if we decide to match all keys, see
+                    # https://stackoverflow.com/questions/33775011/how-to-annotate-count-with-a-condition-in-a-django-queryset/33777815#33777815
+                    match_on[field.source] = kwargs.get(field_name, self._validated_data.get(field.source))
+                if hasattr(field, 'build_match_on'):
+                    # apply matching criteria
+                    related_match_on = field.build_match_on()
+                    # apply match to nested field
+                    match_on.update({"{}__{}".format(field.source, k): v for k, v in related_match_on.items()})
+                else:
+                    match_on[field.source] = kwargs.get(field_name, self._validated_data.get(field.source))
         # a parent serializer may inject a value that isn't among the fields, but is in `match_on`
         for key in self.match_on:
             if key not in self.fields.keys():
@@ -662,6 +673,8 @@ class FocalSaveMixin(FieldLookupMixin):
         for field_name, field in self.fields.items():
             if isinstance(field, ManyRelatedField) or isinstance(self._get_model_field(field.source), ManyToManyField):
                 continue  # m2m fields
+            elif field.source == '*':
+                continue
             elif self.field_types[field_name] == self.TYPE_LOCAL:
                 # need to check kwargs dict since there's no pre-processing
                 values[field.source] = kwargs.get(field_name, self._validated_data.get(field.source))
@@ -673,18 +686,19 @@ class FocalSaveMixin(FieldLookupMixin):
 
     def match(self, kwargs):
         self.logger.debug("FocalSaveMixin.match with no super and kwargs {}".format(kwargs))
-        return self.instance
+        return self.instance, False
 
     @transaction.atomic
     def save(self, **kwargs):
         self.logger.debug("FocalSaveMixin.save for {} with data, kwargs {}".format(self.__class__.__name__, self._validated_data, kwargs))
         if self._validated_data is None and kwargs == {}:
             return None  # deleted
-        match = self.match(kwargs)
+        match, needs_saved = self.match(kwargs)
         self.logger.debug("Match: {}".format(match))
-        self.do_update(match, kwargs)
+        needs_saved = self.do_update(match, kwargs) or needs_saved
         try:
-            match.save()
+            if needs_saved:
+                match.save()
         except (TypeError, ValueError) as e:
             self.fail('incorrect_type', data_type=type(self._validated_data).__name__, exception_message=e.args)
         self.do_m2m_update(match, kwargs)
@@ -865,16 +879,16 @@ class GetOnlyNestedSerializerMixin(NestedSaveSerializer):
     """Gets (without updating) requetsed object or fails."""
 
     def match(self, kwargs):
-        match = super(GetOnlyNestedSerializerMixin, self).match(kwargs)
+        match, needs_saved = super(GetOnlyNestedSerializerMixin, self).match(kwargs)
         self.logger.debug("GetOnlyNestedSerializerMixin.match with super {} and kwargs {}".format(match, kwargs))
         if match is not None:
-            return match
+            return match, needs_saved
         try:
             match_on = self.build_match_on(kwargs)
             self.logger.debug("Matching on: {}".format(match_on))
-            return self.queryset.select_for_update().get(**match_on)
+            return self.queryset.select_for_update().get(**match_on), False
         except self.queryset.model.DoesNotExist:
-            return None
+            return None, False
 
 
 class UpdateOnlyNestedSerializerMixin(UpdateDoSaveMixin, GetOnlyNestedSerializerMixin):
@@ -885,12 +899,12 @@ class GetOrCreateNestedSerializerMixin(GetOnlyNestedSerializerMixin):
     """Gets (without updating) or creates requested object."""
 
     def match(self, kwargs):
-        match = super(GetOrCreateNestedSerializerMixin, self).match(kwargs)
+        match, needs_saved = super(GetOrCreateNestedSerializerMixin, self).match(kwargs)
         self.logger.debug("GetOrCreateNestedSerializerMixin.match with super {} and kwargs {}".format(match, kwargs))
         if match is not None:
-            return match
+            return match, needs_saved
         create_values = self.build_direct_values(kwargs)
-        return self.queryset.model(**create_values)
+        return self.queryset.model(**create_values), True
 
 
 class UpdateOrCreateNestedSerializerMixin(UpdateDoSaveMixin, GetOrCreateNestedSerializerMixin):
@@ -903,7 +917,7 @@ class CreateOnlyNestedSerializerMixin(NestedSaveSerializer):
     def match(self, kwargs):
         self.logger.debug("GetOrCreateNestedSerializerMixin.match with no super and kwargs {}".format(kwargs))
         create_values = self.build_direct_values(kwargs)
-        return self.queryset.model(**create_values)
+        return self.queryset.model(**create_values), True
 
     def do_m2m_update(self, match, m2m_relations):
         # assign relations to forward many-to-many fields
