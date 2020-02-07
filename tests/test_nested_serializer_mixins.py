@@ -22,7 +22,7 @@ class ChildGetOrCreateSerializer(mixins.GetOrCreateNestedSerializerMixin, serial
         fields = '__all__'
 
 
-class GenericParentRelatedSaveSerializer(mixins.RelatedSaveMixin, serializers.Serializer):
+class GenericParentRelatedSaveSerializer(mixins.RelatedSaveMixin):
     class Meta:
         fields = '__all__'
     # source of a 1:many relationship
@@ -470,7 +470,7 @@ class ChildCreateOnlySerializer(mixins.CreateOnlyNestedSerializerMixin, serializ
         fields = '__all__'
 
 
-class ParentRelatedSaveSerializerCreateOnly(mixins.RelatedSaveMixin, serializers.Serializer):
+class ParentRelatedSaveSerializerCreateOnly(mixins.RelatedSaveMixin):
     class Meta:
         fields = '__all__'
     # source of a 1:many relationship
@@ -585,7 +585,7 @@ class ContextConductionTest(TestCase):
 ##################
 # Wildcard Source
 ##################
-class WildcardParentRelatedSaveSerializer(mixins.RelatedSaveMixin, serializers.Serializer):
+class WildcardParentRelatedSaveSerializer(mixins.RelatedSaveMixin):
     class Meta:
         fields = '__all__'
     # makes the current class a pass-through
