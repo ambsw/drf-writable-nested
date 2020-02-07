@@ -4,7 +4,8 @@ from collections import OrderedDict, defaultdict
 
 from django.contrib.contenttypes.fields import GenericRelation
 from django.contrib.contenttypes.models import ContentType
-from django.db import transaction
+from django.core.exceptions import ObjectDoesNotExist
+from django.db import transaction, router
 from django.db.models import ProtectedError, FieldDoesNotExist, OneToOneRel
 from django.db.models.fields.related import ForeignObjectRel, ManyToManyField
 from django.utils.translation import ugettext_lazy as _
@@ -12,7 +13,7 @@ from rest_framework import serializers
 from rest_framework.exceptions import ValidationError
 from rest_framework.fields import empty
 from rest_framework.relations import ManyRelatedField
-from rest_framework.serializers import BaseSerializer
+from rest_framework.serializers import BaseSerializer, ListSerializer
 from rest_framework.validators import UniqueValidator, UniqueTogetherValidator
 
 # permit writable nested serializers
@@ -557,6 +558,8 @@ class RelatedSaveMixin(FieldLookupMixin):
 
     def _save_direct_relations(self, kwargs):
         """Save direct relations so FKs exist when committing the base instance"""
+        if self._validated_data is None and kwargs == {}:
+            return  # delete-only
         for field_name, field in self.fields.items():
             if self.field_types[field_name] != self.TYPE_DIRECT:
                 continue
@@ -580,23 +583,46 @@ class RelatedSaveMixin(FieldLookupMixin):
         for field_name, field in self.fields.items():
             if self.field_types[field_name] != self.TYPE_REVERSE:
                 continue
+            if self._validated_data is None and kwargs == {}:
+                return  # delete-only
             if self._validated_data.get(field.source, empty) == empty and kwargs.get(field_name, empty) == empty:
                 continue  # nothing to save
-            # inject the instance into reverse relations so the <parent>_id ForeignKey field is valid when saved
-            related_field = self._get_model_field(field.source).field
-            print("{} populating reverse field {}".format(self.__class__.__name__, related_field.name))
+            model_field = self._get_model_field(field.source)
+            print("{} populating reverse field {}".format(self.__class__.__name__, model_field.field.name))
             if isinstance(field, serializers.ListSerializer):
+                # reverse FK, inject the instance into reverse relations so the <parent>_id FK field is valid when saved
                 for obj in field._validated_data:
-                    obj[related_field.name] = instance
+                    obj[model_field.field.name] = instance
             elif isinstance(field, serializers.ModelSerializer):
-                if field._validated_data is None:
-                    field._validated_data = {}  # delete situation, but need a place to put FK
-                field._validated_data[related_field.name] = instance
+                # 1:1
+                if self._validated_data[field.source] is None:
+                    # indicates that we should delete 1:1 relation (if it exists)
+                    try:
+                        getattr(instance, field.source).delete()
+                        continue
+                    except ObjectDoesNotExist:
+                        pass
+                else:
+                    field._validated_data[model_field.field.name] = instance
             else:
                 raise Exception("unexpected serializer type")
-            # no tests fail if we do not cache this value in _validated_data, but it's consistent with forward relations
+            # create/update (as appropriate) related objects
             self._validated_data[field.source] = field.save(**kwargs.get(field_name, {}))
             print("{}._validated_data[{}] to reverse {}".format(self.__class__.__name__, field_name, self._validated_data[field.source]))
+
+            # eliminate related objects that weren't in the request
+            if isinstance(field, ListSerializer):
+                # due to a bug in Django, calling `set` on a non-nullable reverse relation will only `add`
+                if model_field.field.null:
+                    getattr(instance, field.source).set(self._validated_data[field.source])
+                else:
+                    # models should be attached when saved so we only need to delete
+                    obj_field = getattr(instance, field.source)
+                    db = router.db_for_write(obj_field.model, instance=instance)
+                    old_objs = set(obj_field.using(db).all())
+                    for obj in old_objs:
+                        if obj not in self._validated_data[field.source]:
+                            obj.delete()
 
 
 class FocalSaveMixin(FieldLookupMixin):
