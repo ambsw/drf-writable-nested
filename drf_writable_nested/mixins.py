@@ -650,14 +650,9 @@ class FocalSaveMixin(FieldLookupMixin):
         for field_name, field in self.fields.items():
             if self.match_on == '__all__' or field_name in self.match_on:
                 # build match_on dict
-                if isinstance(field, NestedSaveListSerializer):
-                    # TODO: dress up the list serializer to distinguish IN vs. ALL in match logic
-                    # if we decide to match all keys, see
-                    # https://stackoverflow.com/questions/33775011/how-to-annotate-count-with-a-condition-in-a-django-queryset/33777815#33777815
-                    match_on[field.source] = kwargs.get(field_name, self._validated_data.get(field.source))
                 if hasattr(field, 'build_match_on'):
-                    # apply matching criteria
-                    related_match_on = field.build_match_on()
+                    # create matching criteria
+                    related_match_on = field.build_match_on(kwargs)
                     # apply match to nested field
                     match_on.update({"{}__{}".format(field.source, k): v for k, v in related_match_on.items()})
                 else:
@@ -754,6 +749,18 @@ class NestedSaveListSerializer(serializers.ListSerializer):
         self._validated_data = super(NestedSaveListSerializer, self).run_validation(data)
         self.logger.debug("List-{} validated: {}".format(self.child.__class__.__name__, self._validated_data))
         return self._validated_data
+
+    def build_match_on(self, kwargs):
+        matches = []
+        for item in self._validated_data:
+            self.child._validated_data = item
+            match, needs_save = self.child.match(kwargs)
+            if not needs_save:  # we retrieved an instance
+                matches.append(match.pk)
+        return {
+            # TODO: make flexible e.g. to support match all
+            'in': matches
+        }
 
 
 class NestedSaveSerializer(RelatedSaveMixin, FocalSaveMixin):

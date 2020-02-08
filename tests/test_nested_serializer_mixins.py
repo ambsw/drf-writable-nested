@@ -105,6 +105,14 @@ class ReverseParentRelatedSaveSerializer(mixins.RelatedSaveMixin, serializers.Mo
     children = ReverseChildGetOrCreateSerializer(many=True)
 
 
+class ReverseParentGetOnlySerializer(mixins.GetOnlyNestedSerializerMixin, serializers.ModelSerializer):
+    class Meta:
+        model = ReverseParent
+        fields = '__all__'
+    # target of a m2m relationship
+    children = ReverseChildGetOrCreateSerializer(many=True)
+
+
 class ReverseManyParentRelatedSaveSerializer(mixins.RelatedSaveMixin, serializers.ModelSerializer):
     class Meta:
         model = ReverseManyParent
@@ -380,6 +388,61 @@ class WritableNestedModelSerializerTest(TestCase):
             3,
             parent.children.count()
         )
+        
+    def test_reverse_match(self):
+        p = ReverseParent.objects.create()
+        ReverseChild.objects.create(
+            parent=p,
+            name='test1',
+        )
+        ReverseChild.objects.create(
+            parent=p,
+            name='test2',
+        )
+        p = ReverseParent.objects.create()
+        ReverseChild.objects.create(
+            parent=p,
+            name='test3',
+        )
+        ReverseChild.objects.create(
+            parent=p,
+            name='test4',
+        )
+
+        serializer = ReverseParentGetOnlySerializer(
+            match_on=['children'],
+            data={
+                'children': [
+                    {
+                        'name': 'test3'
+                    },
+                    {
+                        'name': 'test5'
+                    }
+                ]
+            }
+        )
+        self.assertTrue(
+            serializer.is_valid()
+        )
+        obj = serializer.save()
+        # match on child test3 was successful
+        self.assertEqual(
+            p,
+            obj,
+        )
+        # has two children (i.e. test3, test5)
+        self.assertEqual(
+            2,
+            obj.children.count(),
+        )
+        # contains correct children
+        self.assertTrue(
+            ReverseParent.objects.filter(id=p.id, children__name='test3').exists()
+        )
+        self.assertTrue(
+            ReverseParent.objects.filter(id=p.id, children__name='test5').exists()
+        )
 
 
 ###################
@@ -405,7 +468,7 @@ class GrandParentRelatedSaveSerializer(mixins.RelatedSaveMixin, serializers.Mode
     child = NestedParentGetOrCreateSerializer()
 
 
-class NestedWritableNestedModelSerializerTest(TestCase):
+class DoubleNestedModelSerializerTest(TestCase):
 
     def test_direct_nested_create(self):
         data = {
