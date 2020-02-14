@@ -553,6 +553,9 @@ class RelatedSaveMixin(FieldLookupMixin):
         self.logger.debug("RelatedSaveMixin.save for {} with data, kwargs: {}, {}".format(self.__class__.__name__, self._validated_data, kwargs))
         self._save_direct_relations(kwargs=kwargs)
         instance = super(RelatedSaveMixin, self).save(**kwargs)
+        if instance is None:  # possibly with GetOnly or UpdateOnly
+            # cannot create reverse relations with no object
+            return None
         self._save_reverse_relations(instance=instance, kwargs=kwargs)
         return instance
 
@@ -893,7 +896,9 @@ class GetOnlyNestedSerializerMixin(NestedSaveSerializer):
         try:
             match_on = self.build_match_on(kwargs)
             self.logger.debug("Matching on: {}".format(match_on))
-            return self.queryset.select_for_update().get(**match_on), False
+            # if we don't filter().distint() we can get multiple copies of the same item and get() fails
+            # we can't distinct() and select_for_update() in the same query so we must use a subquery
+            return self.queryset.filter(pk__in=self.queryset.filter(**match_on).distinct()).select_for_update().get(), False
         except self.queryset.model.DoesNotExist:
             return None, False
 
