@@ -5,7 +5,7 @@ from collections import OrderedDict, defaultdict
 from django.contrib.contenttypes.fields import GenericRelation
 from django.contrib.contenttypes.models import ContentType
 from django.core.exceptions import ObjectDoesNotExist
-from django.db import transaction, router
+from django.db import transaction, router, IntegrityError
 from django.db.models import ProtectedError, FieldDoesNotExist, OneToOneRel
 from django.db.models.fields.related import ForeignObjectRel, ManyToManyField
 from django.utils.translation import ugettext_lazy as _
@@ -923,11 +923,14 @@ class UpdateOrCreateNestedSerializerMixin(UpdateDoSaveMixin, GetOrCreateNestedSe
     """Gets (without updating) or creates requested object."""
 
 
-class CreateOnlyNestedSerializerMixin(NestedSaveSerializer):
+class CreateOnlyNestedSerializerMixin(GetOnlyNestedSerializerMixin):
     """Creates requested object or fails."""
 
     def match(self, kwargs):
-        self.logger.debug("GetOrCreateNestedSerializerMixin.match with no super and kwargs {}".format(kwargs))
+        match, needs_saved = super(CreateOnlyNestedSerializerMixin, self).match(kwargs)
+        self.logger.debug("CreateOnlyNestedSerializerMixin.match with super {} and kwargs {}".format(match, kwargs))
+        if match is not None:
+            raise IntegrityError("Matching {} object already exists".format(match.__class__.__name__))
         create_values = self.build_direct_values(kwargs)
         return self.queryset.model(**create_values), True
 
