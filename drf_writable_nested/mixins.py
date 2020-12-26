@@ -645,7 +645,10 @@ class FocalSaveMixin(FieldLookupMixin):
                 continue
             if field_name not in data:
                 continue
-            self._validated_data[field.source] = field.to_internal_value(data[field_name])
+            try:
+                self._validated_data[field.source] = field.to_internal_value(data[field_name])
+            except NotImplementedError:
+                pass  # if `to_internal_value` isn't provided, we won't be able to match on it
         return self._validated_data
 
     def build_match_on(self, kwargs):
